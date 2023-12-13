@@ -1,2 +1,4 @@
 featurecloud
 pandas
+scikit-learn
+numpy

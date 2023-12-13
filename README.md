@@ -37,3 +37,13 @@ This will create a data directory in the current working directory
 In this data directory you can put folders for each clients input
 for your simulations
 6. Test/simulate your app either via the frondend (log in and under testing) or via the CLI (use `featurecloud test --help` for more info)
+
+
+# Testing
+1. featurecloud app build ./fedmean fedmean latest  
+
+2. test start --client-dirs=.,.,.,. --generic-dir=.   --print-logs  --app-image fedmean
+
+
+# original repo:
+https://github.com/mdshihabullah/federated-predicted-euclidean-distance

@@ -1,7 +1,12 @@
+from typing import Union
 from FeatureCloud.app.engine.app import AppState, app_state, Role
 import time
 import pandas as pd
+import numpy as np
 import os
+
+from sklearn.cluster import KMeans
+K = 8
 
 # FeatureCloud requires that apps define the at least the 'initial' state.
 # This state is executed after the app instance is started.
@@ -9,64 +14,126 @@ import os
 class InitialState(AppState):
 
     def register(self):
-        self.register_transition('calculation')  
+        self.register_transition('spikepoint_generation')  
         # We declare that 'terminal' state is accessible from the 'initial' state.
 
     def run(self):
-        # Checkout our documentation for help on how to implement an app
-        # https://featurecloud.ai/assets/developer_documentation/getting_started.html
-        dataFile = os.path.join(os.getcwd(), "mnt", "input", "data.csv")
-        data = pd.read_csv(dataFile)
-        self.store(key="data", value=data)
-        
-        return 'calculation'  
-        # This means we are done. If the coordinator transitions into the 
-        # 'terminal' state, the whole computation will be shut down.
+        # init data
+        data = np.random.randn(100, 32)
+        # we will need to know our data in differnet states (just our data)
+        self.store("data", data)
+        return "spikepoint_generation"
 
 
-@app_state('calculation')
-class CalculationState(AppState):
+@app_state('spikepoint_generation')
+class SpikepointGenerationStage(AppState):
 
     def register(self):
-        self.register_transition('terminal')
-        self.register_transition('aggregate', role=Role.COORDINATOR)  
-        # We declare that 'terminal' state is accessible from the 'initial' state.
+        self.register_transition('spikepoint_broadcast', role=Role.COORDINATOR)
+        self.register_transition('spikepoint_distance_computation', role=Role.PARTICIPANT)
+
 
     def run(self):
-        # Checkout our documentation for help on how to implement an app
-        # https://featurecloud.ai/assets/developer_documentation/getting_started.html
+        #Algorithm 1: Generate spike points based on centroid(s) of each participant’s dataset (For now)
+        # 1. Load data
         data = self.load("data")
-        mean = data["salary"].sum()
-        n = len(data["salary"])
-        self.send_data_to_coordinator((mean, n), 
+        # 2. perfom k-means clustering to get centroids (spkie points)
+        k_means = KMeans(n_clusters=K)
+        k_means.fit(data)
+        centroids = k_means.cluster_centers_
+        
+        # send centroids to coordinator
+        self.send_data_to_coordinator(centroids, 
+                                      send_to_self=True, 
+                                      use_smpc=False, 
+                                      use_dp=False)
+
+        self.log(
+            "Participant generated spike points and sent to coordinator."
+        )
+
+        if self.is_coordinator:
+            return "spikepoint_broadcast"
+        
+        return "spikepoint_distance_computation"
+
+        
+
+@app_state('spikepoint_broadcast')
+class SpikePointBroadcastState(AppState):
+    # This will only be reaached by ccodinator
+
+    def register(self):
+        self.register_transition('spikepoint_distance_computation', role=Role.COORDINATOR)
+
+    def run(self):
+
+        # get all data sent to us by participants
+        data = self.gather_data(use_smpc=False, 
+                                      use_dp=False)
+        self.log(
+            "Coordinator received spike points from all participants."
+        )
+        # combine to one array
+        spikepoints = np.concatenate(data)
+
+        # send out to all participants as spyke points
+        self.broadcast_data(spikepoints, 
+                            send_to_self=True,
+                            use_dp=False)
+
+    
+
+@app_state('spikepoint_distance_computation')
+class SpikepointDistanceStage(AppState):
+
+    def register(self):
+        self.register_transition('DistanceMatrixCalculation', role=Role.COORDINATOR)
+        self.register_transition('terminal', role=Role.PARTICIPANT)
+
+    def run(self):
+        # get the data sent to us by coordinator
+        spikepoints = self.await_data()
+
+        # Local Spike Distance Matrices(LSDMs) are computed by each participant
+        # 1. Load data
+        data = self.load("data")
+        # 2. Compute LSDM i.e. distance of each data point to each spike point
+        #    using Euclidean distance
+        LSDM = np.zeros((data.shape[0], spikepoints.shape[0]))
+        for i in range(data.shape[0]):
+            for j in range(spikepoints.shape[0]):
+                LSDM[i,j] = np.linalg.norm(data[i] - spikepoints[j])
+        # 3. Send LSDM to coordinator
+        self.send_data_to_coordinator(LSDM, 
                                       send_to_self=True, 
                                       use_smpc=False, 
                                       use_dp=False)
         if self.is_coordinator:
-            return "aggregate"
-        else:
-            return "terminal"
+            return "DistanceMatrixCalculation"
         
-
-@app_state('aggregate')
-class AggregateState(AppState):
-
-    def register(self):
-        self.register_transition('terminal')
-        # We declare that 'terminal' state is accessible from the 'initial' state.
-
-    def run(self):
-        # Checkout our documentation for help on how to implement an app
-        # https://featurecloud.ai/assets/developer_documentation/getting_started.html
-        aggData = self.gather_data(use_smpc=False, use_dp=False)
-        total_agg = 0
-        total_n = 0
-        for client_data in aggData:
-            agg = client_data[0]
-            n = client_data[1]
-            total_agg += agg
-            total_n += n
-        resFile = os.path.join(os.getcwd(), "mnt", "output", "result.txt")
-        with open(resFile, "w") as f:
-            f.write(str(total_agg/total_n) + "\n")
         return "terminal"
+    
+
+@app_state('DistanceMatrixCalculation')
+class DistanceMatrixCalculationState(AppState):
+    
+        def register(self):
+            self.register_transition('terminal', role=Role.COORDINATOR)
+    
+        def run(self):
+            # get all data sent to us by participants
+            data = self.gather_data(use_smpc=False,
+                                          use_dp=False)
+            
+            # NOTE: what order????
+
+            # combine to one array
+            # we know that number of spike points is the same for all participants
+            FEDM = np.concatenate(data)
+
+            # save to file
+            resFile = os.path.join(os.getcwd(), "FEDM.csv")
+            np.savetxt(resFile, FEDM, delimiter=",")
+
+            return "terminal"
