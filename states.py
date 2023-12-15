@@ -3,70 +3,113 @@ import time
 import pandas as pd
 import os
 
-# FeatureCloud requires that apps define the at least the 'initial' state.
-# This state is executed after the app instance is started.
+
 @app_state('initial')
 class InitialState(AppState):
 
     def register(self):
-        self.register_transition('calculation')  
-        # We declare that 'terminal' state is accessible from the 'initial' state.
+        self.register_transition('generate_spike_points')  
 
     def run(self):
-        # Checkout our documentation for help on how to implement an app
-        # https://featurecloud.ai/assets/developer_documentation/getting_started.html
+        # TODO: review how to read in data
         dataFile = os.path.join(os.getcwd(), "mnt", "input", "data.csv")
         data = pd.read_csv(dataFile)
         self.store(key="data", value=data)
         
-        return 'calculation'  
-        # This means we are done. If the coordinator transitions into the 
-        # 'terminal' state, the whole computation will be shut down.
+        return 'generate_spike_points'  
 
 
-@app_state('calculation')
-class CalculationState(AppState):
+@app_state('generate_spike_points')
+class GenerateSPState(AppState):
 
     def register(self):
-        self.register_transition('terminal')
-        self.register_transition('aggregate', role=Role.COORDINATOR)  
-        # We declare that 'terminal' state is accessible from the 'initial' state.
+        self.register_transition('share_spike_points')
+        self.register_transition('concatenate_spike_points', role=Role.COORDINATOR)  
 
     def run(self):
-        # Checkout our documentation for help on how to implement an app
-        # https://featurecloud.ai/assets/developer_documentation/getting_started.html
-        data = self.load("data")
-        mean = data["salary"].sum()
-        n = len(data["salary"])
-        self.send_data_to_coordinator((mean, n), 
-                                      send_to_self=True, 
-                                      use_smpc=False, 
-                                      use_dp=False)
+        # TODO: implement kmeans here
+
+        #! Question: Do we have to fear data races?
+        #! ie. wait with transistion until coordinator is done with its task?
         if self.is_coordinator:
-            return "aggregate"
+            return "concatenate_spike_points"
         else:
-            return "terminal"
+            return "share_spike_points"
         
 
-@app_state('aggregate')
-class AggregateState(AppState):
+@app_state('share_spike_points')
+class ShareSPState(AppState):
+
+    def register(self):
+        self.register_transition('construct_lsdm')
+
+    def run(self):
+        # TODO: share generated SP and size of respective dataset to coordinator 
+
+        #! Question: Do we have to fear data races?
+        #! ie. wait with transistion until coordinator is done with its task?
+        return "construct_lsdm"
+
+
+@app_state('concatenate_spike_points')
+class ConcatenateSPState(AppState):
+
+    def register(self):
+        self.register_transition('construct_lsdm')
+
+    def run(self):
+        # TODO: concatinate SP and broadcast 
+        return 'construct_lsdm'
+
+
+@app_state('construct_lsdm')
+class ConstructLSDMState(AppState):
+
+    def register(self):
+        self.register_transition('share_lsdm')
+        self.register_transition('concatenate_lsdm', role=Role.COORDINATOR)  
+
+    def run(self):
+        # TODO: construct lsdm
+        
+        if self.is_coordinator:
+            return "concatenate_lsdm"
+        else:
+            return "share_lsdm"
+
+
+
+@app_state('share_lsdm')
+class ShareLSDMState(AppState):
 
     def register(self):
         self.register_transition('terminal')
-        # We declare that 'terminal' state is accessible from the 'initial' state.
 
     def run(self):
-        # Checkout our documentation for help on how to implement an app
-        # https://featurecloud.ai/assets/developer_documentation/getting_started.html
-        aggData = self.gather_data(use_smpc=False, use_dp=False)
-        total_agg = 0
-        total_n = 0
-        for client_data in aggData:
-            agg = client_data[0]
-            n = client_data[1]
-            total_agg += agg
-            total_n += n
-        resFile = os.path.join(os.getcwd(), "mnt", "output", "result.txt")
-        with open(resFile, "w") as f:
-            f.write(str(total_agg/total_n) + "\n")
+        # TODO: share generated lsdm
+
         return "terminal"
+
+
+@app_state('concatenate_lsdm')
+class ConcatenateLSDMState(AppState):
+
+    def register(self):
+        self.register_transition('construct_fedm')
+
+    def run(self):
+        # TODO: concatinate lsdm
+        
+        return 'construct_fedm'
+
+
+@app_state('construct_fedm')
+class ConstructFEDMState(AppState):
+
+    def register(self):
+        self.register_transition('terminal')
+
+    def run(self):
+        # TODO: construct fedm
+        
+        return 'terminal'
