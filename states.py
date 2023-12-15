@@ -1,5 +1,7 @@
 from FeatureCloud.app.engine.app import AppState, app_state, Role
+from sklearn.cluster import KMeans
 import time
+import numpy as np
 import pandas as pd
 import os
 
@@ -27,7 +29,7 @@ class GenerateSPState(AppState):
         self.register_transition('concatenate_spike_points', role=Role.COORDINATOR)  
 
     def run(self):
-        # TODO: implement kmeans here
+        kmeans = KMeans(n_clusters=2).fit(data)
 
         #! Question: Do we have to fear data races?
         #! ie. wait with transistion until coordinator is done with its task?
@@ -44,7 +46,7 @@ class ShareSPState(AppState):
         self.register_transition('construct_lsdm')
 
     def run(self):
-        # TODO: share generated SP and size of respective dataset to coordinator 
+        self.send_data_to_coordinator(kmeans.cluster_centers_)
 
         #! Question: Do we have to fear data races?
         #! ie. wait with transistion until coordinator is done with its task?
