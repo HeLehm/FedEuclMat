@@ -6,6 +6,21 @@ import pandas as pd
 import os
 
 
+#For each participant: generate spike points of their dataset (different generation methods possible)
+
+#Share generated spike-in points for all participants to coordinator with size of their respective dataset
+
+#Coordinator concatenates all generated spike-in points received and broadcast the points to all participant(s)
+
+#Each participant construct a pairwise distance matrix between their data points 
+# and the spike points which can be denoted as Local Spike Distance Matrices(LSDMs)
+
+#Coordinator concatenates all the LSDM(s) from each participant(s)
+
+#Coordinator constructs FEDM by getting pairwise euclidean distance between
+#each points of the concatenated LSDM(s) shared by all participant(s)
+
+
 @app_state('initial')
 class InitialState(AppState):
 
@@ -29,29 +44,18 @@ class GenerateSPState(AppState):
         self.register_transition('concatenate_spike_points', role=Role.COORDINATOR)  
 
     def run(self):
+        data = self.load("data")
         kmeans = KMeans(n_clusters=2).fit(data)
+        clusterCenters = kmeans.cluster_centers_
+        #? Im supposed to send the size of the dataset as well
+        #? Why? We dont do anything with it
+        self.store(key="clusterCenters", value=clusterCenters)
+        self.send_data_to_coordinator(clusterCenters)
 
-        #! Question: Do we have to fear data races?
-        #! ie. wait with transistion until coordinator is done with its task?
         if self.is_coordinator:
             return "concatenate_spike_points"
         else:
-            return "share_spike_points"
-        
-
-@app_state('share_spike_points')
-class ShareSPState(AppState):
-
-    def register(self):
-        self.register_transition('construct_lsdm')
-
-    def run(self):
-        self.send_data_to_coordinator(kmeans.cluster_centers_)
-
-        #! Question: Do we have to fear data races?
-        #! ie. wait with transistion until coordinator is done with its task?
-        return "construct_lsdm"
-
+            return "construct_lsdm"
 
 @app_state('concatenate_spike_points')
 class ConcatenateSPState(AppState):
@@ -61,6 +65,11 @@ class ConcatenateSPState(AppState):
 
     def run(self):
         # TODO: concatinate SP and broadcast 
+        allClusterCenters = self.gather_data()
+        concatenatedCenters = np.concatenate(allClusterCenters)
+        self.log(concatenatedCenters)
+        self.store(key="concatenatedCenters", value=concatenatedCenters)
+        self.broadcast_data(concatenatedCenters)
         return 'construct_lsdm'
 
 
@@ -72,8 +81,16 @@ class ConstructLSDMState(AppState):
         self.register_transition('concatenate_lsdm', role=Role.COORDINATOR)  
 
     def run(self):
+        if self.is_coordinator:
+            concatenatedCenters = self.load("concatenatedCenters")
+        else:
+            concatenatedCenters = self.await_data(n=1)
+
+        data = self.load(data)
+
         # TODO: construct lsdm
-        
+
+
         if self.is_coordinator:
             return "concatenate_lsdm"
         else:
