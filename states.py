@@ -67,9 +67,11 @@ class recieveSpikePointsState(AppState):
         self.register_transition('terminal')
     def run(self):
         if self.is_coordinator:
-            data = self.load("merged_array")
+            spikepoints = self.load("merged_array")
         else:
-            data = self.await_data(n = 1, unwrap=True, is_json=False)
+            spikepoints = self.await_data(n = 1, unwrap=True, is_json=False)
+
+        print(f"shape of spikepoints: {spikepoints.shape}")
         #calulate LSDM (S x N)
         # for each spike point calculate distance to all data points
         own_data = self.load("data")
@@ -81,16 +83,23 @@ class recieveSpikePointsState(AppState):
         #        #calculate distance
         #        #store distance
         #        pass
-        diff = own_data[:, np.newaxis, :] - data[np.newaxis, :, :]
+        
+        lsdm = np.zeros((own_data.shape[0], spikepoints.shape[0]))
+        for i in range(own_data.shape[0]):
+            for j in range(spikepoints.shape[0]):
+                lsdm[i,j] = np.linalg.norm(own_data[i] - spikepoints[j])
 
-        # Euclidean distance: square the difference, sum across dimensions, and take the square root
-        distances = np.sqrt(np.sum(diff**2, axis=2))
+        #diff = own_data[:, np.newaxis, :] - data[np.newaxis, :, :]
+#
+        ## Euclidean distance: square the difference, sum across dimensions, and take the square root
+        #distances = np.sqrt(np.sum(diff**2, axis=2))
         distances_file = os.path.join(os.getcwd(), "mnt", "output", "LSDM.txt")
+        print(distances_file)
         with open(distances_file, "w") as f:
-            f.write(str(distances) )
+            f.write(str(lsdm) )
 
-        print(f"shape of lsdm: {distances.shape}")
-        self.store(key="lsdm", value=distances)
+        print(f"shape of lsdm: {lsdm.shape}")
+        self.store(key="lsdm", value=lsdm)
 
 
         #construct PEDM
@@ -130,13 +139,9 @@ class shareLSDM(AppState):
                     f.write(str(merged_lsdm) )
                 
                 num_rows = merged_lsdm.shape[0]
-                fedm = np.zeros((num_rows, num_rows))
-                print(f"shape of merged_lsdm: {merged_lsdm.shape}")
+                #fedm should have shape N x N (N = number of samples in all participants) so currently 200 x 200 
+                fedm = np.concatenate(agg_lsdm)
                 print(f"shape of fedm: {fedm.shape}")
-                for i in range(num_rows):
-                    for j in range(num_rows):
-            
-                        fedm[i, j] = np.linalg.norm(agg_lsdm[i] - agg_lsdm[j])
 
                 #save FEDM to file
                 resFile = os.path.join(os.getcwd(), "mnt", "output", "FEDM.txt")
