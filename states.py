@@ -6,6 +6,8 @@ import numpy as np
 #from scipy.spatial import distance
 from sklearn.cluster import KMeans
 
+import utils
+
 # FeatureCloud requires that apps define the at least the 'initial' state.
 # This state is executed after the app instance is started.
 @app_state('initial')
@@ -18,12 +20,18 @@ class InitialState(AppState):
     def run(self):
         # Checkout our documentation for help on how to implement an app
         # https://featurecloud.ai/assets/developer_documentation/getting_started.html
-        #dataFile = os.path.join(os.getcwd(), "mnt", "input", "data.csv")
-        #data = pd.read_csv(dataFile)
+        dataFile = os.path.join(os.getcwd(), "mnt", "input", "part1.tsv")
+        print(dataFile)
+        print(self.id)
+        sample_data = pd.read_csv(dataFile, sep="\t")
+        
+        #drop first column
+        sample_data = sample_data.drop(sample_data.columns[0], axis=1)
         #replace data loading here
         
-
-        sample_data = np.random.rand(100, 1200)
+        sample_data = sample_data.to_numpy()
+        print(f"shape of sample_data: {sample_data.shape}")
+        #sample_data = np.random.rand(100, 1200)
 
         self.store(key="data", value=sample_data)
         
@@ -48,7 +56,7 @@ class CalculationState(AppState):
         #run kmeans on data
         #import sklearn
         #from sklearn.cluster import KMeans
-        kmeans = KMeans(n_clusters=2, random_state=0).fit(data)
+        kmeans = KMeans(n_clusters=10, random_state=0).fit(data)
         print(f"local Kmeans finished: {kmeans.cluster_centers_.shape}")
         self.send_data_to_coordinator(kmeans.cluster_centers_, 
                                       send_to_self=True, 
@@ -75,15 +83,7 @@ class recieveSpikePointsState(AppState):
         #calulate LSDM (S x N)
         # for each spike point calculate distance to all data points
         own_data = self.load("data")
-        #either implement wiht loop
-        #or better with one function
-        #for spikePoint in data:
-        #    for dataPoint in own_data:
-#
-        #        #calculate distance
-        #        #store distance
-        #        pass
-        
+
         lsdm = np.zeros((own_data.shape[0], spikepoints.shape[0]))
         for i in range(own_data.shape[0]):
             for j in range(spikepoints.shape[0]):
@@ -101,14 +101,10 @@ class recieveSpikePointsState(AppState):
         print(f"shape of lsdm: {lsdm.shape}")
         self.store(key="lsdm", value=lsdm)
 
+        reg = utils.regression_per_client(own_data, lsdm)
+        print(f"reg: {reg}")
+        self.store(key="reg", value=reg)
 
-        #construct PEDM
-        # something with regression !
-        #share results:
-        #self.send_data_to_coordinator(kmeans.cluster_centers_, 
-        #                              send_to_self=True, 
-        #                              use_smpc=False, 
-        #                              use_dp=False)
 
         return "shareLSDM"
 
@@ -121,8 +117,11 @@ class shareLSDM(AppState):
         def run(self):
             #share LSDM
             lsdm = self.load("lsdm")
+            reg = self.load("reg")
+            obj= {"lsdm": lsdm, "reg": reg}
+
             print("sending data to coordinator")
-            self.send_data_to_coordinator(lsdm, 
+            self.send_data_to_coordinator(obj, 
                                     send_to_self=True, 
                                     use_smpc=False, 
                                     use_dp=False)
@@ -131,8 +130,16 @@ class shareLSDM(AppState):
                 print("start gathering")
                 agg_lsdm= self.gather_data(use_smpc=False, use_dp=False)
                 print("end gathering")
+                print(f"agg_lsdm: {agg_lsdm}")
+                agg_lsdms   = [x["lsdm"] for x in agg_lsdm]
+                print(agg_lsdms)
+                #print(f"shape of agg_lsdms: {agg_lsdms.shape}")
+                agg_regs    = [x["reg"] for x in agg_lsdm]
+                print(agg_regs)
+                #print(f"shape of agg_regs: {agg_regs.shape}")
 
-                merged_lsdm = np.concatenate(agg_lsdm, axis=0)
+                merged_lsdm = np.concatenate(agg_lsdms, axis=0)
+                print(f"shape of merged_lsdm: {merged_lsdm.shape}")
                 #save mergedLSDM to file
                 resFile = os.path.join(os.getcwd(), "mnt", "output", "mergedLSDM.txt")
                 with open(resFile, "w") as f:
@@ -140,13 +147,28 @@ class shareLSDM(AppState):
                 
                 num_rows = merged_lsdm.shape[0]
                 #fedm should have shape N x N (N = number of samples in all participants) so currently 200 x 200 
-                fedm = np.concatenate(agg_lsdm)
+                #fedm = np.concatenate(agg_lsdm)
+                fedm= merged_lsdm
                 print(f"shape of fedm: {fedm.shape}")
 
                 #save FEDM to file
                 resFile = os.path.join(os.getcwd(), "mnt", "output", "FEDM.txt")
                 with open(resFile, "w") as f:
                     f.write(str(fedm) )
+                Mx, Mc = utils.construct_global_Mx_Cx_matrix(agg_regs)
+                print("Shape of Mx and Cx", Mx.shape, Mc.shape)
+                pedm = utils.calc_pred_dist_matrix(
+                    fedm=fedm,
+                    global_Mx=Mx,
+                    global_Cx=Mc
+                )
+                print("Shape of PEDM", pedm.shape)
+                #save PEDM to file
+                resFile = os.path.join(os.getcwd(), "mnt", "output", "PEDM.txt")
+                with open(resFile, "w") as f:
+                    f.write(str(pedm) )
+                
+
 
 
 
@@ -184,16 +206,3 @@ class AggregateSpikePointsState(AppState):
 
 
 
-        #calulate LSDM
-
-        #construct PEDM
-
-
-@app_state('wrapup')
-class wrapupState(AppState):
-    def register(self):
-        self.register_transition('terminal')
-    def run(self):
-        aggData = self.gather_data(use_smpc=False, use_dp=False)
-        return "terminal"
-        #perform warp up
