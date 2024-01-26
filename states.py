@@ -20,20 +20,22 @@ class InitialState(AppState):
     def run(self):
         # Checkout our documentation for help on how to implement an app
         # https://featurecloud.ai/assets/developer_documentation/getting_started.html
-        dataFile = os.path.join(os.getcwd(), "mnt", "input", "part1.tsv")
+        dataFile = os.path.join(os.getcwd(), "mnt", "input", "part.tsv")
         print(dataFile)
         print(self.id)
         sample_data = pd.read_csv(dataFile, sep="\t")
+        print(sample_data)
         
         #drop first column
+        id_column = sample_data[sample_data.columns[0]].copy()
         sample_data = sample_data.drop(sample_data.columns[0], axis=1)
         #replace data loading here
         
         sample_data = sample_data.to_numpy()
         print(f"shape of sample_data: {sample_data.shape}")
         #sample_data = np.random.rand(100, 1200)
-
-        self.store(key="data", value=sample_data)
+        _dict = {"data": sample_data, "id": id_column}
+        self.store(key="data", value=_dict)
         
         return 'calculation'  
         # This means we are done. If the coordinator transitions into the 
@@ -53,6 +55,7 @@ class CalculationState(AppState):
         # Checkout our documentation for help on how to implement an app
         # https://featurecloud.ai/assets/developer_documentation/getting_started.html
         data = self.load("data")
+        data = data["data"]
         #run kmeans on data
         #import sklearn
         #from sklearn.cluster import KMeans
@@ -83,6 +86,7 @@ class recieveSpikePointsState(AppState):
         #calulate LSDM (S x N)
         # for each spike point calculate distance to all data points
         own_data = self.load("data")
+        own_data = own_data["data"]
 
         lsdm = np.zeros((own_data.shape[0], spikepoints.shape[0]))
         for i in range(own_data.shape[0]):
@@ -116,9 +120,11 @@ class shareLSDM(AppState):
             self.register_transition('terminal')
         def run(self):
             #share LSDM
+            data = self.load("data")
+            ids = data["id"]
             lsdm = self.load("lsdm")
             reg = self.load("reg")
-            obj= {"lsdm": lsdm, "reg": reg}
+            obj= {"lsdm": lsdm, "reg": reg, "ids": ids}
 
             print("sending data to coordinator")
             self.send_data_to_coordinator(obj, 
@@ -132,6 +138,7 @@ class shareLSDM(AppState):
                 print("end gathering")
                 print(f"agg_lsdm: {agg_lsdm}")
                 agg_lsdms   = [x["lsdm"] for x in agg_lsdm]
+                agg_ids = [id for dictionary in agg_lsdm for id in dictionary["ids"]]
                 print(agg_lsdms)
                 #print(f"shape of agg_lsdms: {agg_lsdms.shape}")
                 agg_regs    = [x["reg"] for x in agg_lsdm]
@@ -149,6 +156,7 @@ class shareLSDM(AppState):
                 #fedm should have shape N x N (N = number of samples in all participants) so currently 200 x 200 
                 #fedm = np.concatenate(agg_lsdm)
                 fedm= merged_lsdm
+                np.save(os.path.join(os.getcwd(), "mnt", "output", "fedm.npy"), fedm)
                 print(f"shape of fedm: {fedm.shape}")
 
                 #save FEDM to file
@@ -167,7 +175,11 @@ class shareLSDM(AppState):
                 resFile = os.path.join(os.getcwd(), "mnt", "output", "PEDM.txt")
                 with open(resFile, "w") as f:
                     f.write(str(pedm) )
-                
+                print(f"aggIDS : {agg_ids}")
+                df = pd.DataFrame(pedm)
+                df.insert(0, 'ID', agg_ids)
+                df.to_csv(os.path.join(os.getcwd(), "mnt", "output", "PEDM.csv"), index=False)
+                np.save(os.path.join(os.getcwd(), "mnt", "output", "PEDM.npy"), pedm)
 
 
 
@@ -192,7 +204,8 @@ class AggregateSpikePointsState(AppState):
         #save aggData to file
         resFile = os.path.join(os.getcwd(), "mnt", "output", "aggData.txt")
         with open(resFile, "w") as f:
-            f.write(str(aggData) )
+            f.write(str(aggData) )#
+        np.save(os.path.join(os.getcwd(), "mnt", "output", "SpikePoints.npy"), aggData)
 
 
 
