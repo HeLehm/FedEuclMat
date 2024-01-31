@@ -101,7 +101,7 @@ def calc_pred_dist_matrix(fedm, global_Mx, global_Cx):
 
     Args:
         fedm (n-D array) :
-            Matrix containing the distance of the pairwise distances between each element of all the participants' LSDM
+            Each Participants LSDM concatinated and converted to FEDMby running euclidean_distances on it
         global_Mx (n-D array) :
             Matrix containing the slopes for each datapoints of all participants (construct_global_Mx_Cx_matrix output [0])
         global_Cx (n-D array) :
@@ -110,8 +110,6 @@ def calc_pred_dist_matrix(fedm, global_Mx, global_Cx):
     Returns:
         PEDM (n-D array) : Distance matrix calculated from the slope and intercept returned from regression and after applying to FEDM
     """
-    # TODO: I dont know if this is the fedm or the value we passed here was the fedm
-    fedm = euclidean_distances(fedm)
 
     # Multiply the slope with each value of FEDM followed by adding intercept with it 
     # to minimize error of the distance between two points
@@ -160,7 +158,7 @@ if __name__ == "__main__":
     # SEND LSDM AND REG VALUES TO COORDINATOR
 
     # CONSTRUCTOR
-    fedm= np.concatenate((lsdm1, lsdm2))
+    fedm = euclidean_distances(np.concatenate((lsdm1, lsdm2)))
     print("Shape of FEDM", fedm.shape)
     Mx, Mc = construct_global_Mx_Cx_matrix([reg_1, reg_2])
     print("Shape of Mx and Cx", Mx.shape, Mc.shape)
