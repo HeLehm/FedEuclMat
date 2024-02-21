@@ -8,6 +8,7 @@ from sklearn.cluster import KMeans
 
 import utils
 
+import yaml
 # FeatureCloud requires that apps define the at least the 'initial' state.
 # This state is executed after the app instance is started.
 @app_state('initial')
@@ -20,21 +21,23 @@ class InitialState(AppState):
     def run(self):
         # Checkout our documentation for help on how to implement an app
         # https://featurecloud.ai/assets/developer_documentation/getting_started.html
-        dataFile = os.path.join(os.getcwd(), "mnt", "input", "part.tsv")
+
+        #Load configuration file
+        print("loading config")
+        config = os.path.join(os.getcwd(), "mnt", "input", "config.yaml")
+        config = yaml.load(open(config), Loader=yaml.FullLoader)
+        self.store(key="config", value=config)
+        print(config)
+        print("self:", self.__dict__)
+        dataFile = os.path.join(os.getcwd(), "mnt", "input", "data.csv")
         print(dataFile)
         print(self.id)
         sample_data = pd.read_csv(dataFile, sep="\t")
-        print(sample_data)
-        
-        #drop first column
-        id_column = sample_data[sample_data.columns[0]].copy()
-        sample_data = sample_data.drop(sample_data.columns[0], axis=1)
-        #replace data loading here
-        
-        sample_data = sample_data.to_numpy()
-        print(f"shape of sample_data: {sample_data.shape}")
-        #sample_data = np.random.rand(100, 1200)
-        _dict = {"data": sample_data, "id": id_column}
+        sample_data = sample_data.T.to_numpy()
+        print("shape of sample_data: ", sample_data.shape)
+
+
+        _dict = {"data": sample_data}#, "id": id_column}
         self.store(key="data", value=_dict)
         
         return 'calculation'  
@@ -49,19 +52,19 @@ class CalculationState(AppState):
         self.register_transition('terminal')
         self.register_transition('AggregateSpikePoints', role=Role.COORDINATOR)  
         self.register_transition('recieveSpikePoints')
-        # We declare that 'terminal' state is accessible from the 'initial' state.
 
     def run(self):
-        # Checkout our documentation for help on how to implement an app
-        # https://featurecloud.ai/assets/developer_documentation/getting_started.html
+
         data = self.load("data")
         data = data["data"]
-        #run kmeans on data
-        #import sklearn
-        #from sklearn.cluster import KMeans
-        kmeans = KMeans(n_clusters=10, random_state=0).fit(data)
-        print(f"local Kmeans finished: {kmeans.cluster_centers_.shape}")
-        self.send_data_to_coordinator(kmeans.cluster_centers_, 
+
+
+        #overwrite this method for different spike point generation
+        def gen_spikepoints(data):
+            from sklearn.cluster import AffinityPropagation
+            return AffinityPropagation().fit(data).cluster_centers_
+        spike_points = gen_spikepoints(data)
+        self.send_data_to_coordinator(spike_points, 
                                       send_to_self=True, 
                                       use_smpc=False, 
                                       use_dp=False)
@@ -88,25 +91,16 @@ class recieveSpikePointsState(AppState):
         own_data = self.load("data")
         own_data = own_data["data"]
 
-        lsdm = np.zeros((own_data.shape[0], spikepoints.shape[0]))
-        for i in range(own_data.shape[0]):
-            for j in range(spikepoints.shape[0]):
-                lsdm[i,j] = np.linalg.norm(own_data[i] - spikepoints[j])
-
-        #diff = own_data[:, np.newaxis, :] - data[np.newaxis, :, :]
+        lsdm = utils.euclidean_distances(own_data, spikepoints)       
+        print("Shape of LSDM", lsdm.shape, lsdm.shape)
 #
-        ## Euclidean distance: square the difference, sum across dimensions, and take the square root
-        #distances = np.sqrt(np.sum(diff**2, axis=2))
-        distances_file = os.path.join(os.getcwd(), "mnt", "output", "LSDM.txt")
-        print(distances_file)
-        with open(distances_file, "w") as f:
-            f.write(str(lsdm) )
 
-        print(f"shape of lsdm: {lsdm.shape}")
         self.store(key="lsdm", value=lsdm)
 
         reg = utils.regression_per_client(own_data, lsdm)
+        
         print(f"reg: {reg}")
+        
         self.store(key="reg", value=reg)
 
 
@@ -121,10 +115,10 @@ class shareLSDM(AppState):
         def run(self):
             #share LSDM
             data = self.load("data")
-            ids = data["id"]
+            #ids = data["id"]
             lsdm = self.load("lsdm")
             reg = self.load("reg")
-            obj= {"lsdm": lsdm, "reg": reg, "ids": ids}
+            obj= {"lsdm": lsdm, "reg": reg}# "ids": ids}
 
             print("sending data to coordinator")
             self.send_data_to_coordinator(obj, 
@@ -136,9 +130,10 @@ class shareLSDM(AppState):
                 print("start gathering")
                 agg_lsdm= self.gather_data(use_smpc=False, use_dp=False)
                 print("end gathering")
+
                 print(f"agg_lsdm: {agg_lsdm}")
                 agg_lsdms   = [x["lsdm"] for x in agg_lsdm]
-                agg_ids = [id for dictionary in agg_lsdm for id in dictionary["ids"]]
+                #agg_ids = [id_ for dictionary in agg_lsdm for id_ in dictionary["ids"]]
                 print(agg_lsdms)
                 #print(f"shape of agg_lsdms: {agg_lsdms.shape}")
                 agg_regs    = [x["reg"] for x in agg_lsdm]
@@ -147,37 +142,30 @@ class shareLSDM(AppState):
 
                 merged_lsdm = np.concatenate(agg_lsdms, axis=0)
                 print(f"shape of merged_lsdm: {merged_lsdm.shape}")
-                #save mergedLSDM to file
-                resFile = os.path.join(os.getcwd(), "mnt", "output", "mergedLSDM.txt")
-                with open(resFile, "w") as f:
-                    f.write(str(merged_lsdm) )
-                
-                num_rows = merged_lsdm.shape[0]
-                #fedm should have shape N x N (N = number of samples in all participants) so currently 200 x 200 
-                #fedm = np.concatenate(agg_lsdm)
-                fedm= merged_lsdm
-                np.save(os.path.join(os.getcwd(), "mnt", "output", "fedm.npy"), fedm)
-                print(f"shape of fedm: {fedm.shape}")
 
-                #save FEDM to file
-                resFile = os.path.join(os.getcwd(), "mnt", "output", "FEDM.txt")
-                with open(resFile, "w") as f:
-                    f.write(str(fedm) )
+                num_rows = merged_lsdm.shape[0]
+
+                #fedm should have shape N x N (N = number of samples in all participants) so currently 200 x 200 
+                fedm = utils.euclidean_distances(merged_lsdm)
+                print("Shape of FEDM", fedm.shape)
+                np.save(os.path.join(os.getcwd(), "mnt", "output", "fedm.npy"), fedm)
+
                 Mx, Mc = utils.construct_global_Mx_Cx_matrix(agg_regs)
                 print("Shape of Mx and Cx", Mx.shape, Mc.shape)
+
                 pedm = utils.calc_pred_dist_matrix(
                     fedm=fedm,
                     global_Mx=Mx,
                     global_Cx=Mc
                 )
+                # make pedm symmetric
+                pedm = (pedm + pedm.T) / 2
                 print("Shape of PEDM", pedm.shape)
                 #save PEDM to file
-                resFile = os.path.join(os.getcwd(), "mnt", "output", "PEDM.txt")
-                with open(resFile, "w") as f:
-                    f.write(str(pedm) )
-                print(f"aggIDS : {agg_ids}")
+
+                #print(f"aggIDS : {agg_ids}")
                 df = pd.DataFrame(pedm)
-                df.insert(0, 'ID', agg_ids)
+                #df.insert(0, 'ID', agg_ids)
                 df.to_csv(os.path.join(os.getcwd(), "mnt", "output", "PEDM.csv"), index=False)
                 np.save(os.path.join(os.getcwd(), "mnt", "output", "PEDM.npy"), pedm)
 
@@ -200,16 +188,14 @@ class AggregateSpikePointsState(AppState):
         # https://featurecloud.ai/assets/developer_documentation/getting_started.html
         aggData = self.gather_data(use_smpc=False, use_dp=False)
         merged_array = np.concatenate(aggData, axis=0)
+        
+        #BEGIN: printing and saving: 
         print(f"shape of merged_array: {merged_array.shape}")
-        #save aggData to file
-        resFile = os.path.join(os.getcwd(), "mnt", "output", "aggData.txt")
-        with open(resFile, "w") as f:
-            f.write(str(aggData) )#
-        np.save(os.path.join(os.getcwd(), "mnt", "output", "SpikePoints.npy"), aggData)
+        #save aggData to numpy file
+        np.save(os.path.join(os.getcwd(), "mnt", "output", "SpikePoints.npy"), merged_array)
+        #END: printing and saving
 
 
-
-        #figure out shape of aggData
         #redistribute to participants
         self.store(key="merged_array", value=merged_array)
         self.broadcast_data(merged_array, send_to_self=False    , use_dp=False )
