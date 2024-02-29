@@ -1,0 +1,5 @@
+fedmean:
+  local_dataset:
+    data: in_data.csv
+  result:
+    data: out_data.csv
