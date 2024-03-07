@@ -8,6 +8,7 @@ def split_data(data_path, n_participants):
     #transpose back to retain original data structure
     transposed_splits = [split.T for split in split_data]
     return transposed_splits
+    
 def save_in_respective_folders(splits, controller_path):
     for i, split in enumerate(splits):
         path = controller_path + f"/input{i+1}/data.csv"
@@ -18,6 +19,6 @@ def save_in_respective_folders(splits, controller_path):
         print(f"Participant data saved in {path}")
 
 if __name__=="__main__":
-    data = "/home/henri/Desktop/playground/playground_15/simulated/A/A.n_genes=500,m=4,std=1,overlap=no.exprs_z.tsv"
+    data = "PATH/TO/simulated/A/A.n_genes=500,m=4,std=1,overlap=no.exprs_z.tsv"
     splits = split_data(data, 4)
-    save_in_respective_folders(splits, "/home/henri/Desktop/Git/data")
+    save_in_respective_folders(splits, "PATH/TO/data")

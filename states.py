@@ -6,34 +6,34 @@ import numpy as np
 #from scipy.spatial import distance
 from sklearn.cluster import KMeans
 
+
+from participants_utils import generate_n_spikes_using_variance
 import utils
 
 import yaml
-# FeatureCloud requires that apps define the at least the 'initial' state.
-# This state is executed after the app instance is started.
+
 @app_state('initial')
 class InitialState(AppState):
 
     def register(self):
         self.register_transition('calculation')  
-        # We declare that 'terminal' state is accessible from the 'initial' state.
 
     def run(self):
-        # Checkout our documentation for help on how to implement an app
-        # https://featurecloud.ai/assets/developer_documentation/getting_started.html
 
         #Load configuration file
         print("loading config")
         config = os.path.join(os.getcwd(), "mnt", "input", "config.yaml")
         config = yaml.load(open(config), Loader=yaml.FullLoader)
+
         self.store(key="config", value=config)
         print(config)
-        print("self:", self.__dict__)
+
         dataFile = os.path.join(os.getcwd(), "mnt", "input", "data.csv")
-        print(dataFile)
-        print(self.id)
+
         sample_data = pd.read_csv(dataFile, sep="\t")
+        print(sample_data.head())
         sample_data = sample_data.T.to_numpy()
+
         print("shape of sample_data: ", sample_data.shape)
 
 
@@ -41,8 +41,6 @@ class InitialState(AppState):
         self.store(key="data", value=_dict)
         
         return 'calculation'  
-        # This means we are done. If the coordinator transitions into the 
-        # 'terminal' state, the whole computation will be shut down.
 
 
 @app_state('calculation')
@@ -60,10 +58,36 @@ class CalculationState(AppState):
 
 
         #overwrite this method for different spike point generation
-        def gen_spikepoints(data):
-            from sklearn.cluster import AffinityPropagation
-            return AffinityPropagation().fit(data).cluster_centers_
-        spike_points = gen_spikepoints(data)
+        #or simply write another method and call it here with new if
+        def gen_spikepoints(data, N=10, method="random_centroids"):
+            print(f"generating using method: {method}")
+            if method == "centroids":
+                centroids = KMeans(n_clusters=N).fit(data).cluster_centers_
+                #centroids = AffinityPropagation().fit(data).cluster_centers_
+                return centroids
+            
+            if method == "random":
+                return generate_n_spikes_using_variance(
+                    dataset=data,
+                    variance=0.9,
+                    no_of_spikes=N,
+                )
+            
+            if method == "random_centroids":
+                ## concatenate both methods
+                c_spikes = gen_spikepoints(data, N=N // 2, method="centroids")
+                r_spikes = gen_spikepoints(data, N=N // 2, method="random")
+                return np.concatenate([c_spikes, r_spikes], axis=0)
+        
+        #read SpikePoint generation method & cluster_n from config
+        self.load("config")
+        method = self.load("config")["spike_point_generation"]["generation_method"]
+        n_clusters = self.load("config")["spike_point_generation"]["n_clusters"]
+
+        #generate spike points
+        spike_points = gen_spikepoints(data, N=n_clusters, method=method)
+
+        #send spike points to coordinator
         self.send_data_to_coordinator(spike_points, 
                                       send_to_self=True, 
                                       use_smpc=False, 
@@ -81,22 +105,26 @@ class recieveSpikePointsState(AppState):
         self.register_transition('terminal')
     def run(self):
         if self.is_coordinator:
+            #for some reason send to self does not work as expected in Broadcast
+            #so we need to load the data from the coordinator 
             spikepoints = self.load("merged_array")
         else:
             spikepoints = self.await_data(n = 1, unwrap=True, is_json=False)
 
         print(f"shape of spikepoints: {spikepoints.shape}")
+
         #calulate LSDM (S x N)
-        # for each spike point calculate distance to all data points
+        #for each spike point calculate distance to all data points
         own_data = self.load("data")
         own_data = own_data["data"]
 
         lsdm = utils.euclidean_distances(own_data, spikepoints)       
-        print("Shape of LSDM", lsdm.shape, lsdm.shape)
+        print("Shape of LSDM", lsdm.shape)
 #
 
         self.store(key="lsdm", value=lsdm)
 
+        #perform regression for the PEDM generation later on
         reg = utils.regression_per_client(own_data, lsdm)
         
         print(f"reg: {reg}")
@@ -113,12 +141,13 @@ class shareLSDM(AppState):
         def register(self):
             self.register_transition('terminal')
         def run(self):
-            #share LSDM
+            
             data = self.load("data")
-            #ids = data["id"]
             lsdm = self.load("lsdm")
             reg = self.load("reg")
-            obj= {"lsdm": lsdm, "reg": reg}# "ids": ids}
+
+            #send a dictionary with lsdm and reg to the coordinator
+            obj= {"lsdm": lsdm, "reg": reg}
 
             print("sending data to coordinator")
             self.send_data_to_coordinator(obj, 
@@ -130,14 +159,11 @@ class shareLSDM(AppState):
                 print("start gathering")
                 agg_lsdm= self.gather_data(use_smpc=False, use_dp=False)
                 print("end gathering")
-
-                print(f"agg_lsdm: {agg_lsdm}")
+                print("aggregated lsdms:", len(agg_lsdm))
+                #print(f"agg_lsdm: {agg_lsdm}")
                 agg_lsdms   = [x["lsdm"] for x in agg_lsdm]
-                #agg_ids = [id_ for dictionary in agg_lsdm for id_ in dictionary["ids"]]
-                print(agg_lsdms)
                 #print(f"shape of agg_lsdms: {agg_lsdms.shape}")
                 agg_regs    = [x["reg"] for x in agg_lsdm]
-                print(agg_regs)
                 #print(f"shape of agg_regs: {agg_regs.shape}")
 
                 merged_lsdm = np.concatenate(agg_lsdms, axis=0)
@@ -145,7 +171,7 @@ class shareLSDM(AppState):
 
                 num_rows = merged_lsdm.shape[0]
 
-                #fedm should have shape N x N (N = number of samples in all participants) so currently 200 x 200 
+                #fedm should have shape N x N (N = number of samples in all participants)
                 fedm = utils.euclidean_distances(merged_lsdm)
                 print("Shape of FEDM", fedm.shape)
                 np.save(os.path.join(os.getcwd(), "mnt", "output", "fedm.npy"), fedm)
@@ -163,9 +189,7 @@ class shareLSDM(AppState):
                 print("Shape of PEDM", pedm.shape)
                 #save PEDM to file
 
-                #print(f"aggIDS : {agg_ids}")
                 df = pd.DataFrame(pedm)
-                #df.insert(0, 'ID', agg_ids)
                 df.to_csv(os.path.join(os.getcwd(), "mnt", "output", "PEDM.csv"), index=False)
                 np.save(os.path.join(os.getcwd(), "mnt", "output", "PEDM.npy"), pedm)
 
@@ -184,8 +208,7 @@ class AggregateSpikePointsState(AppState):
         # We declare that 'terminal' state is accessible from the 'initial' state.
 
     def run(self):
-        # Checkout our documentation for help on how to implement an app
-        # https://featurecloud.ai/assets/developer_documentation/getting_started.html
+
         aggData = self.gather_data(use_smpc=False, use_dp=False)
         merged_array = np.concatenate(aggData, axis=0)
         

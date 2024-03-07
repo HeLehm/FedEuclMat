@@ -1,39 +1,28 @@
 # Description
-This is a small demo for Featurecloud, showing how to calculate the mean in a federated manner.
+Feature Cloud implementation for Shihab Ullahs Master Thesis ”Calculating pairwise euclidean distance matrix for horizontally partitioned data in federated learning environment"
 
-# Algorithm
-The algorithm simply shares the sum of all entries and the number of rows that were used for the sum with the coordinator. The coordinator adds the sums and divides by the total number of entries
 
 # Input
-A csv file with the column "salary"
+A tab seperated csv file for each participant called """data.csv""". """create_splits.py""" can help in creating datasplits for local testing.
+Additionally a config.yaml is expected in the shared directory in the form of config.yaml that is provided in this directory.
 
 # Output
-A txt file with the mean value
+Saves the different Matrices as .npy files, the final PEDM is also saved as csv.
 
-# Creation
-To create a similiar app, follow these steps.
-Also, check out the [documentation of featurecloud](https://featurecloud.ai/assets/developer_documentation/index.html).
+# Workflow
 
-1. Initialise an empty app
-```
-featurecloud app new <yourappname>
-```
-2. Implement your logic in `states.py`
-3. For any package you imported, state that in the requirements.txt so it will be loaded into the docker container
-4. Build your docker image with
-```
-# Move out of the app folder
-cd ..
-# ls should now show the <yourappname> directory
-featurecloud app build ./<yourappname> yourappname latest
-# the arguments from this are [PATH] [IMAGE_NAME] [TAG]
-# see the --help option for more info
-```
-5. Start the controller to be able to test your app
+1. Clone Repository
+
+2. Start contorller 
 ```
 featurecloud controller start
+
 ```
-This will create a data directory in the current working directory
-In this data directory you can put folders for each clients input
-for your simulations
-6. Test/simulate your app either via the frondend (log in and under testing) or via the CLI (use `featurecloud test --help` for more info)
+3. Build the app 
+```
+featurecloud app build <name> <name> latest
+```
+4. Input data into data directory or using the create_splits.py
+5. Run the build using the FeatureCloud.ai frontend
+
+In utils.py a local execution is provided and visualize.ipynb allows for visualization of the algorithm. These however perform the calculations locally only simulating the federated setting by splitting the data. 
