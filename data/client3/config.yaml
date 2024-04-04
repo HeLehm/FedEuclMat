@@ -1,0 +1,17 @@
+fed_euclidean_matrix:
+  data_file: "data.csv"         # The file containing the data, see Input
+                                # for more information about the format
+  seperator: "\t"               # The seperator used in the data file
+  spike_point_generation:
+    num_spikepoints: 20         # The number of spike points to generate
+                                # more spike points is not always better 
+                                # due to the curse of dimensionality 
+                                # if you're unsure, use 20
+    generation_method: "random_centroids" # either centroids, random or random_centroids
+                                # if you're unsure, use random
+                                # centroids: generate spike points around centroids
+                                # random: generate uniformly distributed random spike points
+                                # random_centroids: generate half of the spike points using 
+                                #   the random method and the other half using the centroids method.
+                                #   In case of an uneven number of spike points, the random method
+                                #   will be used for the extra spike point.

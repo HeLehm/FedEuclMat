@@ -110,7 +110,6 @@ def calc_pred_dist_matrix(fedm, global_Mx, global_Cx):
     Returns:
         PEDM (n-D array) : Distance matrix calculated from the slope and intercept returned from regression and after applying to FEDM
     """
-    # TODO: I dont know if this is the fedm or the value we passed here was the fedm
     fedm = euclidean_distances(fedm)
 
     # Multiply the slope with each value of FEDM followed by adding intercept with it 
